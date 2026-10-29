@@ -105,6 +105,13 @@ class FakeKeePassXC:
         payload = self.decrypt(msg["message"], msg["nonce"])
         inner_action = payload.get("action") or action
 
+        if self.locked and inner_action not in {"test-associate"}:
+            encrypted = self.encrypt(
+                {"error": "Database not opened", "errorCode": 1},
+                msg["nonce"],
+            )
+            return {"action": inner_action, **encrypted}
+
         if inner_action == "associate":
             if not self.auto_approve_associate:
                 encrypted = self.encrypt(

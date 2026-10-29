@@ -21,6 +21,8 @@ from typing import Any
 from nacl.public import Box, PrivateKey, PublicKey
 from nacl.utils import random as nacl_random
 
+from keepassxc_mcp.dbus import find_db_path, is_locked_error, launch_gui, request_open
+
 NONCE_SIZE = 24
 CLIENT_ID_SIZE = 24
 
@@ -143,6 +145,7 @@ class KPXCClient:
         self.server_pk: bytes | None = None
         self.client_id = ""
         self.identity = load_identity(identity_file)
+        self.auto_unlock = os.environ.get("KEEPASSXC_MCP_AUTO_UNLOCK", "1") not in {"0", "false", "no"}
         self._lock = threading.Lock()
         self._new_session()
 
@@ -323,10 +326,83 @@ class KPXCClient:
     ) -> dict[str, Any]:
         try:
             return self.send_encrypted(action, payload, timeout)
+        except KeePassXCError as exc:
+            if (
+                action != "lock-database"
+                and self.auto_unlock
+                and is_locked_error(exc)
+            ):
+                log("database locked; asking KeePassXC to prompt for unlock")
+                self.unlock()
+                return self.send_encrypted(action, payload, timeout)
+            raise
         except (ConnectionError, BrokenPipeError, ConnectionResetError, OSError) as exc:
             log(f"connection lost ({exc}); reconnecting")
             self._reconnect()
             return self.send_encrypted(action, payload, timeout)
+
+    def _is_available(self) -> bool:
+        """True when the database answers; False only while it is locked."""
+        try:
+            self.send_encrypted("get-databasehash")
+            return True
+        except KeePassXCError as exc:
+            if is_locked_error(exc):
+                return False
+            raise
+
+    def unlock(self, db_path: str | None = None, timeout: float | None = None) -> dict[str, Any]:
+        """Ask KeePassXC to open the database, which raises its unlock prompt.
+
+        Two attempts, because a tray-hidden KeePassXC ignores a bare D-Bus
+        open request: first the D-Bus method, then launching the binary, which
+        brings up the window with its password box. The master password is
+        typed by the user there; this process never receives it.
+        """
+        path = db_path or find_db_path()
+        if not path:
+            raise KeePassXCError(
+                "cannot determine the database path; set KEEPASSXC_DB or KEEPASSXC_DB_DIR"
+            )
+        if not Path(path).exists():
+            raise KeePassXCError(f"database file not found: {path}")
+
+        total = timeout if timeout is not None else float(
+            os.environ.get("KEEPASSXC_UNLOCK_TIMEOUT", "120")
+        )
+        deadline = time.time() + total
+
+        if self._is_available():
+            return {"unlocked": True, "database": path, "already_unlocked": True}
+
+        asked = request_open(path)
+        if not asked:
+            log("D-Bus open request failed; will launch the KeePassXC window")
+
+        probe_until = time.time() + 5
+        while time.time() < probe_until:
+            if self._is_available():
+                log(f"database unlocked via D-Bus: {path}")
+                return {"unlocked": True, "database": path}
+            time.sleep(0.5)
+
+        log("no response to the D-Bus request; launching KeePassXC's unlock window")
+        if not launch_gui(path):
+            raise KeePassXCError(
+                "KeePassXC is locked and its window could not be opened; "
+                "open KeePassXC and unlock the database manually"
+            )
+
+        while time.time() < deadline:
+            if self._is_available():
+                log(f"database unlocked: {path}")
+                return {"unlocked": True, "database": path}
+            time.sleep(1)
+
+        raise KeePassXCError(
+            "timed out waiting for the database to be unlocked in KeePassXC. "
+            "Open KeePassXC (it may be hidden in the tray) and unlock it, then retry."
+        )
 
     def associate(self) -> str:
         if self.server_pk is None:
@@ -371,6 +447,13 @@ class KPXCClient:
     def ensure_ready(self) -> None:
         try:
             self.ensure_associated()
+        except KeePassXCError as exc:
+            if self.auto_unlock and is_locked_error(exc):
+                log("database locked during readiness check; prompting for unlock")
+                self.unlock()
+                self.ensure_associated()
+                return
+            raise
         except (ConnectionError, BrokenPipeError, ConnectionResetError, OSError, TimeoutError) as exc:
             log(f"readiness check failed ({exc}); reconnecting")
             self._reconnect()

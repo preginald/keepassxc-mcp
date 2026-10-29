@@ -10,6 +10,7 @@ It never opens your `.kdbx` file and never asks for the master password.
 |---|---|
 | `status` | Reachable? Associated? Database hash + KeePassXC version |
 | `associate` | First-time pairing (KeePassXC shows a confirm dialog) |
+| `unlock` | Raise KeePassXC's unlock window when the database is locked |
 | `get_logins` | Username/password/TOTP for a **URL** |
 | `get_totp` | Current TOTP for an entry UUID |
 | `set_login` | Create or update a login |
@@ -73,7 +74,23 @@ or `python -m keepassxc_mcp` from an environment that has the package installed.
 | `KEEPASSXC_SOCKET` | Unix socket path (otherwise auto-detected) |
 | `KEEPASSXC_HOST` / `KEEPASSXC_PORT` | TCP instead of Unix (for a forwarded socket) |
 | `KEEPASSXC_MCP_IDENTITY` | Identity file path |
+| `KEEPASSXC_DB` | Database path used by `unlock` (skips discovery) |
+| `KEEPASSXC_DB_DIR` | Folder to discover the newest `.kdbx` in |
+| `KEEPASSXC_BIN` | KeePassXC binary to launch for the unlock window |
+| `KEEPASSXC_MCP_AUTO_UNLOCK` | `0` disables the automatic unlock attempt |
+| `KEEPASSXC_UNLOCK_TIMEOUT` | Seconds to wait for unlock, default 120 |
 | `KEEPASSXC_TIMEOUT` | Seconds (default 30; association waits up to 120) |
+
+## Locked database
+
+Credential tools fail while the database is locked. `unlock` (and every other
+tool, unless auto-unlock is off) tries D-Bus `openDatabase` first, then launches
+KeePassXC so its window appears with a password box. **You** type the master
+password there; this server never receives it.
+
+D-Bus alone is not enough when KeePassXC is hidden in the tray — it accepts the
+call and shows nothing. That is why the launch fallback exists. Verified on
+KeePassXC 2.7.12 / Hyprland.
 
 ## Security
 

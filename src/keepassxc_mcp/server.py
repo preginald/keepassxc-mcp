@@ -171,6 +171,21 @@ def set_login(
 
 
 @mcp.tool()
+def unlock(timeout: float | None = None) -> str:
+    """Ask KeePassXC to open a locked database, raising its unlock prompt.
+
+    The master password is typed by the user in the KeePassXC window; this
+    server never sees it. Other tools call this automatically when they hit a
+    locked database, unless KEEPASSXC_MCP_AUTO_UNLOCK=0.
+    """
+    try:
+        result = get_client().unlock(timeout=timeout)
+        return _ok(result)
+    except Exception as exc:
+        return _fail(exc)
+
+
+@mcp.tool()
 def generate_password() -> str:
     """Generate a password using KeePassXC's generator settings.
 

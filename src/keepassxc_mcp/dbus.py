@@ -129,15 +129,41 @@ def request_open(db_path: str) -> bool:
     return _gdbus_open(db_path)
 
 
-def launch_gui(db_path: str) -> bool:
-    """Start the KeePassXC binary on the database.
+def _gui_env() -> dict[str, str]:
+    """Environment that lets KeePassXC open a Wayland window.
 
-    With SingleInstance enabled this forwards to the running tray process,
-    which shows its unlock window — the one path proven to raise a usable
-    prompt when the app is hidden in the tray. The password is typed by the
-    user in that window, never handled here.
+    Omarchy sets QT_QPA_PLATFORM="wayland;xcb"; when the X display is
+    unreachable the xcb fallback aborts the process inside
+    QGuiApplication::createPlatformIntegration. Pin plain Wayland instead,
+    and name a real wayland socket when the shell did not export one.
     """
-    binary = os.environ.get("KEEPASSXC_BIN") or shutil.which("keepassxc")
+    env = dict(os.environ)
+    env.setdefault("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    if not env.get("WAYLAND_DISPLAY"):
+        try:
+            for name in sorted(os.listdir(env["XDG_RUNTIME_DIR"])):
+                if name.startswith("wayland-") and not name.endswith(".lock"):
+                    env["WAYLAND_DISPLAY"] = name
+                    break
+        except OSError:
+            pass
+    env["QT_QPA_PLATFORM"] = "wayland"
+    return env
+
+
+def launch_gui(db_path: str) -> bool:
+    """Start KeePassXC on the database so it shows its unlock window.
+
+    With SingleInstance enabled this forwards to the running tray process.
+    The password is typed by the user in that window, never handled here.
+    """
+    binary = os.environ.get("KEEPASSXC_BIN")
+    if not binary:
+        shim = os.path.expanduser("~/.local/bin/keepassxc-wayland")
+        if os.path.exists(shim) and os.access(shim, os.X_OK):
+            binary = shim
+        else:
+            binary = shutil.which("keepassxc")
     if not binary:
         log("keepassxc binary not found; cannot raise the unlock window")
         return False
@@ -146,6 +172,7 @@ def launch_gui(db_path: str) -> bool:
             [binary, db_path],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
+            env=_gui_env(),
             start_new_session=True,
         )
         return True

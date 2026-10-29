@@ -92,6 +92,11 @@ D-Bus alone is not enough when KeePassXC is hidden in the tray — it accepts th
 call and shows nothing. That is why the launch fallback exists. Verified on
 KeePassXC 2.7.12 / Hyprland.
 
+The launcher pins `QT_QPA_PLATFORM=wayland` and finds a live wayland socket.
+Omarchy exports `QT_QPA_PLATFORM="wayland;xcb"`; with an unreachable X display
+that fallback aborts KeePassXC inside `QGuiApplication::createPlatformIntegration`
+before any window exists, so the unlock prompt can never appear.
+
 ## Security
 
 - Secrets travel encrypted (NaCl box) between this process and KeePassXC, then as MCP tool results to the agent.
